@@ -80,12 +80,14 @@ runTLSPipePredicate :: (ClientParams, ServerParams) -> (Maybe Information -> Boo
 runTLSPipePredicate params p = runTLSPipe params tlsServer tlsClient
   where tlsServer ctx queue = do
             handshake ctx
+            checkFinished ctx
             checkInfoPredicate ctx
             d <- recvData ctx
             writeChan queue [d]
             bye ctx
         tlsClient queue ctx = do
             handshake ctx
+            checkFinished ctx
             checkInfoPredicate ctx
             d <- readChan queue
             sendData ctx (L.fromChunks [d])
@@ -109,12 +111,14 @@ runTLSPipeSimple13 params mode mEarlyData = runTLSPipe params tlsServer tlsClien
                     chunks <- replicateM (length ls) $ recvData ctx
                     (ls, ed) `assertEq` (map B.length chunks, B.concat chunks)
             d <- recvData ctx
+            checkFinished ctx
             writeChan queue [d]
             minfo <- contextGetInformation ctx
             Just mode `assertEq` (minfo >>= infoTLS13HandshakeMode)
             bye ctx
         tlsClient queue ctx = do
             handshake ctx
+            checkFinished ctx
             d <- readChan queue
             sendData ctx (L.fromChunks [d])
             minfo <- contextGetInformation ctx
@@ -132,12 +136,14 @@ runTLSPipeCapture13 params = do
   where tlsServer ref ctx queue = do
             installHook ctx ref
             handshake ctx
+            checkFinished ctx
             d <- recvData ctx
             writeChan queue [d]
             bye ctx
         tlsClient ref queue ctx = do
             installHook ctx ref
             handshake ctx
+            checkFinished ctx
             d <- readChan queue
             sendData ctx (L.fromChunks [d])
             byeBye ctx
@@ -149,6 +155,7 @@ runTLSPipeSimpleKeyUpdate :: (ClientParams, ServerParams) -> PropertyM IO ()
 runTLSPipeSimpleKeyUpdate params = runTLSPipeN 3 params tlsServer tlsClient
   where tlsServer ctx queue = do
             handshake ctx
+            checkFinished ctx
             d0 <- recvData ctx
             req <- generate $ elements [OneWay, TwoWay]
             _ <- updateKey ctx req
@@ -158,6 +165,7 @@ runTLSPipeSimpleKeyUpdate params = runTLSPipeN 3 params tlsServer tlsClient
             bye ctx
         tlsClient queue ctx = do
             handshake ctx
+            checkFinished ctx
             d0 <- readChan queue
             sendData ctx (L.fromChunks [d0])
             d1 <- readChan queue
@@ -175,11 +183,13 @@ runTLSInitFailureGen params hsServer hsClient = do
     assertIsLeft sRes
   where tlsServer ctx = do
             _ <- hsServer ctx
+            checkFinished ctx
             minfo <- contextGetInformation ctx
             byeBye ctx
             return $ "server success: " ++ show minfo
         tlsClient ctx = do
             _ <- hsClient ctx
+            checkFinished ctx
             minfo <- contextGetInformation ctx
             byeBye ctx
             return $ "client success: " ++ show minfo
@@ -747,6 +757,7 @@ prop_post_handshake_auth = do
             byeBye ctx
         hsServer ctx = do
             handshake ctx
+            checkFinished ctx
             recvDataAssert ctx "request 1"
             _ <- requestCertificate ctx  -- single request
             sendData ctx "response 1"
@@ -756,6 +767,7 @@ prop_post_handshake_auth = do
             sendData ctx "response 2"
         hsClient ctx = do
             handshake ctx
+            checkFinished ctx
             sendData ctx "request 1"
             recvDataAssert ctx "response 1"
             sendData ctx "request 2"
@@ -844,6 +856,7 @@ prop_handshake_alpn = do
     runTLSPipe params' tlsServer tlsClient
   where tlsServer ctx queue = do
             handshake ctx
+            checkFinished ctx
             proto <- getNegotiatedProtocol ctx
             Just "h2" `assertEq` proto
             d <- recvData ctx
@@ -851,6 +864,7 @@ prop_handshake_alpn = do
             bye ctx
         tlsClient queue ctx = do
             handshake ctx
+            checkFinished ctx
             proto <- getNegotiatedProtocol ctx
             Just "h2" `assertEq` proto
             d <- readChan queue
@@ -875,6 +889,7 @@ prop_handshake_sni = do
     Just (Just serverName) `assertEq` receivedName
   where tlsServer ctx queue = do
             handshake ctx
+            checkFinished ctx
             sni <- getClientSNI ctx
             Just serverName `assertEq` sni
             d <- recvData ctx
@@ -882,6 +897,7 @@ prop_handshake_sni = do
             bye ctx
         tlsClient queue ctx = do
             handshake ctx
+            checkFinished ctx
             sni <- getClientSNI ctx
             Just serverName `assertEq` sni
             d <- readChan queue
@@ -905,11 +921,13 @@ prop_handshake_renegotiation = do
         else runTLSPipe (cparams, sparams') tlsServer tlsClient
   where tlsServer ctx queue = do
             hsServer ctx
+            checkFinished ctx
             d <- recvData ctx
             writeChan queue [d]
             bye ctx
         tlsClient queue ctx = do
             hsClient ctx
+            checkFinished ctx
             d <- readChan queue
             sendData ctx (L.fromChunks [d])
             byeBye ctx
@@ -939,12 +957,14 @@ prop_thread_safety = do
     runTLSPipe params tlsServer tlsClient
   where tlsServer ctx queue = do
             handshake ctx
+            checkFinished ctx
             runReaderWriters ctx "client-value" "server-value"
             d <- recvData ctx
             writeChan queue [d]
             bye ctx
         tlsClient queue ctx = do
             handshake ctx
+            checkFinished ctx
             runReaderWriters ctx "server-value" "client-value"
             d <- readChan queue
             sendData ctx (L.fromChunks [d])
@@ -969,6 +989,15 @@ recvDataAssert :: Context -> C8.ByteString -> IO ()
 recvDataAssert ctx expected = do
     got <- recvData ctx
     assertEq expected got
+
+checkFinished :: Context -> IO ()
+checkFinished ctx = do
+    ctxFinished <- getFinished ctx
+    unless (isJust ctxFinished) $
+        fail "unexpected ctxFinished"
+    ctxPeerFinished <- getPeerFinished ctx
+    unless (isJust ctxPeerFinished) $
+        fail "unexpected ctxPeerFinished"
 
 main :: IO ()
 main = defaultMain $ testGroup "tls"
